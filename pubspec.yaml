@@ -22,13 +22,13 @@ dev_dependencies:
 flutter:
   plugin:
     platforms:
-      android:
-        package: dev.steenbakker.mobile_scanner
-        pluginClass: MobileScannerPlugin
+      # android:
+      #   package: dev.steenbakker.mobile_scanner
+      #   pluginClass: MobileScannerPlugin
       ios:
         pluginClass: MobileScannerPlugin
-      macos:
-        pluginClass: MobileScannerPlugin
-      web:
-        pluginClass: MobileScannerWebPlugin
-        fileName: mobile_scanner_web_plugin.dart
+      # macos:
+      #   pluginClass: MobileScannerPlugin
+      # web:
+      #   pluginClass: MobileScannerWebPlugin
+      #   fileName: mobile_scanner_web_plugin.dart
