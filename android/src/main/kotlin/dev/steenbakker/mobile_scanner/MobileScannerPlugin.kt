@@ -6,16 +6,44 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 
 /** MobileScannerPlugin */
 class MobileScannerPlugin : FlutterPlugin, ActivityAware {
+    private var activityPluginBinding: ActivityPluginBinding? = null
+    private var flutterPluginBinding: FlutterPlugin.FlutterPluginBinding? = null
+    private var methodCallHandler: MobileScannerHandler? = null
 
-    override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {}
+    override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        this.flutterPluginBinding = binding
+    }
 
-    override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {}
+    override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        this.flutterPluginBinding = null
+    }
 
-    override fun onAttachedToActivity(activityPluginBinding: ActivityPluginBinding) {}
+    override fun onAttachedToActivity(activityPluginBinding: ActivityPluginBinding) {
+        val binaryMessenger = this.flutterPluginBinding!!.binaryMessenger
 
-    override fun onDetachedFromActivity() {}
+        methodCallHandler = MobileScannerHandler(
+            activityPluginBinding.activity,
+            BarcodeHandler(binaryMessenger),
+            binaryMessenger,
+            MobileScannerPermissions(),
+            activityPluginBinding::addRequestPermissionsResultListener,
+            this.flutterPluginBinding!!.textureRegistry,
+        )
 
-    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {}
+        this.activityPluginBinding = activityPluginBinding
+    }
 
-    override fun onDetachedFromActivityForConfigChanges() {}
+    override fun onDetachedFromActivity() {
+        methodCallHandler?.dispose(this.activityPluginBinding!!)
+        methodCallHandler = null
+        activityPluginBinding = null
+    }
+
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        onAttachedToActivity(binding)
+    }
+
+    override fun onDetachedFromActivityForConfigChanges() {
+        onDetachedFromActivity()
+    }
 }
