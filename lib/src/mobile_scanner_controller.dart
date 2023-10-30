@@ -6,7 +6,6 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:mobile_scanner/src/barcode_utility.dart';
 
 /// The [MobileScannerController] holds all the logic of this plugin,
 /// where as the [MobileScanner] class is the frontend of this plugin.
@@ -49,11 +48,13 @@ class MobileScannerController {
   /// WARNING: DetectionSpeed.unrestricted can cause memory issues on some devices
   final DetectionSpeed detectionSpeed;
 
-  /// Sets the timeout of scanner.
-  /// The timeout is set in miliseconds.
+  /// Sets the timeout, in milliseconds, of the scanner.
   ///
-  /// NOTE: The timeout only works if the [detectionSpeed] is set to
-  /// [DetectionSpeed.normal] (which is the default value).
+  /// This timeout is ignored if the [detectionSpeed]
+  /// is not set to [DetectionSpeed.normal].
+  ///
+  /// By default this is set to `250` milliseconds,
+  /// which prevents memory issues on older devices.
   final int detectionTimeoutMs;
 
   /// Automatically start the mobileScanner on initialization.
@@ -130,10 +131,11 @@ class MobileScannerController {
     final Map<String, dynamic> arguments = {};
 
     cameraFacingState.value = cameraFacingOverride ?? facing;
-    arguments['facing'] = cameraFacingState.value.index;
+    arguments['facing'] = cameraFacingState.value.rawValue;
     arguments['torch'] = torchEnabled;
-    arguments['speed'] = detectionSpeed.index;
+    arguments['speed'] = detectionSpeed.rawValue;
     arguments['timeout'] = detectionTimeoutMs;
+    arguments['returnImage'] = returnImage;
 
     /*    if (scanWindow != null) {
       arguments['scanWindow'] = [
@@ -145,19 +147,18 @@ class MobileScannerController {
     } */
 
     if (formats != null) {
-      if (kIsWeb || Platform.isIOS || Platform.isMacOS) {
+      if (kIsWeb || Platform.isIOS || Platform.isMacOS || Platform.isAndroid) {
         arguments['formats'] = formats!.map((e) => e.rawValue).toList();
-      } else if (Platform.isAndroid) {
-        arguments['formats'] = formats!.map((e) => e.index).toList();
-        if (cameraResolution != null) {
-          arguments['cameraResolution'] = <int>[
-            cameraResolution!.width.toInt(),
-            cameraResolution!.height.toInt(),
-          ];
-        }
       }
     }
-    arguments['returnImage'] = returnImage;
+
+    if (cameraResolution != null) {
+      arguments['cameraResolution'] = <int>[
+        cameraResolution!.width.toInt(),
+        cameraResolution!.height.toInt(),
+      ];
+    }
+
     return arguments;
   }
 
@@ -185,8 +186,24 @@ class MobileScannerController {
 
     // Check authorization status
     if (!kIsWeb) {
-      final MobileScannerState state = MobileScannerState
-          .values[await _methodChannel.invokeMethod('state') as int? ?? 0];
+      final MobileScannerState state;
+
+      try {
+        state = MobileScannerState
+            .values[await _methodChannel.invokeMethod('state') as int? ?? 0];
+      } on PlatformException catch (error) {
+        isStarting = false;
+
+        throw MobileScannerException(
+          errorCode: MobileScannerErrorCode.genericError,
+          errorDetails: MobileScannerErrorDetails(
+            code: error.code,
+            details: error.details as Object?,
+            message: error.message,
+          ),
+        );
+      }
+
       switch (state) {
         case MobileScannerState.undetermined:
           bool result = false;
@@ -269,14 +286,26 @@ class MobileScannerController {
       torchState.value = TorchState.on;
     }
 
+    final Size size;
+
+    if (kIsWeb) {
+      size = Size(
+        startResult['videoWidth'] as double? ?? 0,
+        startResult['videoHeight'] as double? ?? 0,
+      );
+    } else {
+      final Map<Object?, Object?>? sizeInfo =
+          startResult['size'] as Map<Object?, Object?>?;
+
+      size = Size(
+        sizeInfo?['width'] as double? ?? 0,
+        sizeInfo?['height'] as double? ?? 0,
+      );
+    }
+
     isStarting = false;
     return startArguments.value = MobileScannerArguments(
-      size: kIsWeb
-          ? Size(
-              startResult['videoWidth'] as double? ?? 0,
-              startResult['videoHeight'] as double? ?? 0,
-            )
-          : toSize(startResult['size'] as Map? ?? {}),
+      size: size,
       hasTorch: hasTorch,
       textureId: kIsWeb ? null : startResult['textureId'] as int?,
       webId: kIsWeb ? startResult['ViewID'] as String? : null,
@@ -311,7 +340,7 @@ class MobileScannerController {
     torchState.value =
         torchState.value == TorchState.off ? TorchState.on : TorchState.off;
 
-    await _methodChannel.invokeMethod('torch', torchState.value.index);
+    await _methodChannel.invokeMethod('torch', torchState.value.rawValue);
   }
 
   /// Changes the state of the camera (front or back).
@@ -406,7 +435,9 @@ class MobileScannerController {
             barcodes: [
               Barcode(
                 rawValue: (data as Map)['payload'] as String?,
-                format: toFormat(data['symbology'] as int),
+                format: BarcodeFormat.fromRawValue(
+                  data['symbology'] as int? ?? -1,
+                ),
               ),
             ],
           ),
@@ -414,6 +445,8 @@ class MobileScannerController {
         break;
       case 'barcodeWeb':
         final barcode = data as Map?;
+        final corners = barcode?['corners'] as List<Object?>? ?? <Object?>[];
+
         _barcodesController.add(
           BarcodeCapture(
             raw: data,
@@ -422,10 +455,15 @@ class MobileScannerController {
                 Barcode(
                   rawValue: barcode['rawValue'] as String?,
                   rawBytes: barcode['rawBytes'] as Uint8List?,
-                  format: toFormat(barcode['format'] as int),
-                  corners: toCorners(
-                    (barcode['corners'] as List<Object?>? ?? [])
-                        .cast<Map<Object?, Object?>>(),
+                  format: BarcodeFormat.fromRawValue(
+                    barcode['format'] as int? ?? -1,
+                  ),
+                  corners: List.unmodifiable(
+                    corners.cast<Map<Object?, Object?>>().map(
+                      (Map<Object?, Object?> e) {
+                        return Offset(e['x']! as double, e['y']! as double);
+                      },
+                    ),
                   ),
                 ),
             ],

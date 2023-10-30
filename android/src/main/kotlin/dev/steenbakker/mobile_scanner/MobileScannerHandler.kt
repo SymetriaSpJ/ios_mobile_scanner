@@ -29,11 +29,12 @@ class MobileScannerHandler(
                 "name" to "barcode",
                 "data" to barcodes
             ))
-            analyzerResult?.success(true)
-        } else {
-            analyzerResult?.success(false)
         }
-        analyzerResult = null
+
+        Handler(Looper.getMainLooper()).post {
+            analyzerResult?.success(barcodes != null)
+            analyzerResult = null
+        }
     }
 
     private var analyzerResult: MethodChannel.Result? = null
@@ -91,7 +92,6 @@ class MobileScannerHandler(
         if(listener != null) {
             activityPluginBinding.removeRequestPermissionsResultListener(listener)
         }
-
     }
 
     @ExperimentalGetImage
@@ -119,8 +119,8 @@ class MobileScannerHandler(
             "stop" -> stop(result)
             "analyzeImage" -> analyzeImage(call, result)
             "setScale" -> setScale(call, result)
-            "resetScale" -> resetScale(call, result)
-            "updateScanWindow" -> updateScanWindow(call)
+            "resetScale" -> resetScale(result)
+            "updateScanWindow" -> updateScanWindow(call, result)
             else -> result.notImplemented()
         }
     }
@@ -137,8 +137,8 @@ class MobileScannerHandler(
         var barcodeScannerOptions: BarcodeScannerOptions? = null
         if (formats != null) {
             val formatsList: MutableList<Int> = mutableListOf()
-            for (index in formats) {
-                formatsList.add(BarcodeFormats.values()[index].intValue)
+            for (formatValue in formats) {
+                formatsList.add(BarcodeFormats.fromRawValue(formatValue).intValue)
             }
             barcodeScannerOptions = if (formatsList.size == 1) {
                 BarcodeScannerOptions.Builder().setBarcodeFormats(formatsList.first())
@@ -218,7 +218,7 @@ class MobileScannerHandler(
         try {
             mobileScanner!!.toggleTorch(call.arguments == 1)
             result.success(null)
-        } catch (e: AlreadyStopped) {
+        } catch (e: TorchWhenStopped) {
             result.error("MobileScanner", "Called toggleTorch() while stopped!", null)
         }
     }
@@ -234,7 +234,7 @@ class MobileScannerHandler(
         }
     }
 
-    private fun resetScale(call: MethodCall, result: MethodChannel.Result) {
+    private fun resetScale(result: MethodChannel.Result) {
         try {
             mobileScanner!!.resetScale()
             result.success(null)
@@ -243,7 +243,9 @@ class MobileScannerHandler(
         }
     }
 
-    private fun updateScanWindow(call: MethodCall) {
+    private fun updateScanWindow(call: MethodCall, result: MethodChannel.Result) {
         mobileScanner!!.scanWindow = call.argument<List<Float>?>("rect")
+
+        result.success(null)
     }
 }

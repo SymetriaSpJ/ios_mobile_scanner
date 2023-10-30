@@ -1,12 +1,12 @@
 //
-//  SwiftMobileScanner.swift
+//  MobileScanner.swift
 //  mobile_scanner
 //
 //  Created by Julian Steenbakker on 15/02/2022.
 //
 
 import Foundation
-
+import Flutter
 import AVFoundation
 import MLKitVision
 import MLKitBarcodeScanning
@@ -55,6 +55,12 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
 
     var standardZoomFactor: CGFloat = 1
 
+    private var nextScanTime = 0.0
+    
+    private var imagesCurrentlyBeingProcessed = false
+    
+    public var timeoutSeconds: Double = 0
+
     init(registry: FlutterTextureRegistry?, mobileScannerCallback: @escaping MobileScannerCallback, torchModeChangeCallback: @escaping TorchModeChangeCallback, zoomScaleChangeCallback: @escaping ZoomScaleChangeCallback) {
         self.registry = registry
         self.mobileScannerCallback = mobileScannerCallback
@@ -89,8 +95,15 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         }
         latestBuffer = imageBuffer
         registry?.textureFrameAvailable(textureId)
-        if ((detectionSpeed == DetectionSpeed.normal || detectionSpeed == DetectionSpeed.noDuplicates) && i > 10 || detectionSpeed == DetectionSpeed.unrestricted) {
-            i = 0
+        
+        let currentTime = Date().timeIntervalSince1970
+        let eligibleForScan = currentTime > nextScanTime && !imagesCurrentlyBeingProcessed
+        
+        if ((detectionSpeed == DetectionSpeed.normal || detectionSpeed == DetectionSpeed.noDuplicates) && eligibleForScan || detectionSpeed == DetectionSpeed.unrestricted) {
+
+            nextScanTime = currentTime + timeoutSeconds
+            imagesCurrentlyBeingProcessed = true
+            
             let ciImage = latestBuffer.image
 
             let image = VisionImage(image: ciImage)
@@ -101,6 +114,8 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             )
 
             scanner.process(image) { [self] barcodes, error in
+                imagesCurrentlyBeingProcessed = false
+                
                 if (detectionSpeed == DetectionSpeed.noDuplicates) {
                     let newScannedBarcodes = barcodes?.map { barcode in
                         return barcode.rawValue
@@ -114,8 +129,6 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
 
                 mobileScannerCallback(barcodes, error, ciImage)
             }
-        } else {
-            i+=1
         }
     }
 
@@ -178,7 +191,7 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             throw MobileScannerError.cameraError(error)
         }
 
-        captureSession.sessionPreset = AVCaptureSession.Preset.photo;
+        captureSession.sessionPreset = AVCaptureSession.Preset.photo
         // Add video output.
         let videoOutput = AVCaptureVideoDataOutput()
 
@@ -219,23 +232,19 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
                     device.activeFormat.formatDescription)
                 let hasTorch = device.hasTorch
                 
-                DispatchQueue.main.async {
-                    completion(
-                        MobileScannerStartParameters(
-                            width: Double(dimensions.height),
-                            height: Double(dimensions.width),
-                            hasTorch: hasTorch,
-                            textureId: self.textureId ?? 0
-                        )
+                completion(
+                    MobileScannerStartParameters(
+                        width: Double(dimensions.height),
+                        height: Double(dimensions.width),
+                        hasTorch: hasTorch,
+                        textureId: self.textureId ?? 0
                     )
-                }
+                )
                 
                 return
             }
             
-            DispatchQueue.main.async {
-                completion(MobileScannerStartParameters())
-            }
+            completion(MobileScannerStartParameters())
         }
     }
 
@@ -281,7 +290,7 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     public override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
         switch keyPath {
         case "torchMode":
-            // off = 0; on = 1; auto = 2;
+            // off = 0; on = 1; auto = 2
             let state = change?[.newKey] as? Int
             torchModeChangeCallback(state)
         case "videoZoomFactor":
@@ -296,12 +305,12 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     /// Set the zoom factor of the camera
     func setScale(_ scale: CGFloat) throws {
         if (device == nil) {
-            throw MobileScannerError.torchWhenStopped
+            throw MobileScannerError.zoomWhenStopped
         }
         
         do {
             try device.lockForConfiguration()
-            var maxZoomFactor = device.activeFormat.videoMaxZoomFactor
+            let maxZoomFactor = device.activeFormat.videoMaxZoomFactor
             
             var actualScale = (scale * 4) + 1
             
@@ -335,7 +344,6 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         }
     }
 
-
     /// Analyze a single image
     func analyzeImage(image: UIImage, position: AVCaptureDevice.Position, callback: @escaping BarcodeScanningCallback) {
         let image = VisionImage(image: image)
@@ -348,22 +356,18 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         scanner.process(image, completion: callback)
     }
 
-    var i = 0
-
     var barcodesString: Array<String?>?
 
-
-
-//    /// Convert image buffer to jpeg
-//    private func ciImageToJpeg(ciImage: CIImage) -> Data {
-//
-//        // let ciImage = CIImage(cvPixelBuffer: latestBuffer)
-//        let context:CIContext = CIContext.init(options: nil)
-//        let cgImage:CGImage = context.createCGImage(ciImage, from: ciImage.extent)!
-//        let uiImage:UIImage = UIImage(cgImage: cgImage, scale: 1, orientation: UIImage.Orientation.up)
-//
-//        return uiImage.jpegData(compressionQuality: 0.8)!;
-//    }
+    //    /// Convert image buffer to jpeg
+    //    private func ciImageToJpeg(ciImage: CIImage) -> Data {
+    //
+    //        // let ciImage = CIImage(cvPixelBuffer: latestBuffer)
+    //        let context:CIContext = CIContext.init(options: nil)
+    //        let cgImage:CGImage = context.createCGImage(ciImage, from: ciImage.extent)!
+    //        let uiImage:UIImage = UIImage(cgImage: cgImage, scale: 1, orientation: UIImage.Orientation.up)
+    //
+    //        return uiImage.jpegData(compressionQuality: 0.8)!
+    //    }
 
     /// Rotates images accordingly
     func imageOrientation(
