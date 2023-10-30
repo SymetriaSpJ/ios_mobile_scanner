@@ -2,6 +2,8 @@ package dev.steenbakker.mobile_scanner
 
 import android.app.Activity
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -156,47 +158,59 @@ class MobileScannerHandler(
 
         val detectionSpeed: DetectionSpeed = DetectionSpeed.values().first { it.intValue == speed}
 
-        try {
-            mobileScanner!!.start(barcodeScannerOptions, returnImage, position, torch, detectionSpeed, torchStateCallback, zoomScaleStateCallback, mobileScannerStartedCallback = {
-                result.success(mapOf(
-                    "textureId" to it.id,
-                    "size" to mapOf("width" to it.width, "height" to it.height),
-                    "torchable" to it.hasFlashUnit
-                ))
-            },
-                timeout.toLong())
-
-        } catch (e: AlreadyStarted) {
-            result.error(
-                "MobileScanner",
-                "Called start() while already started",
-                null
-            )
-        } catch (e: NoCamera) {
-            result.error(
-                "MobileScanner",
-                "No camera found or failed to open camera!",
-                null
-            )
-        } catch (e: TorchError) {
-            result.error(
-                "MobileScanner",
-                "Error occurred when setting torch!",
-                null
-            )
-        } catch (e: CameraError) {
-            result.error(
-                "MobileScanner",
-                "Error occurred when setting up camera!",
-                null
-            )
-        } catch (e: Exception) {
-            result.error(
-                "MobileScanner",
-                "Unknown error occurred..",
-                null
-            )
-        }
+        mobileScanner!!.start(
+                barcodeScannerOptions,
+                returnImage,
+                position,
+                torch,
+                detectionSpeed,
+                torchStateCallback,
+                zoomScaleStateCallback,
+                mobileScannerStartedCallback = {
+                    Handler(Looper.getMainLooper()).post {
+                        result.success(mapOf(
+                                "textureId" to it.id,
+                                "size" to mapOf("width" to it.width, "height" to it.height),
+                                "torchable" to it.hasFlashUnit
+                        ))
+                    }
+                },
+                mobileScannerErrorCallback = {
+                    Handler(Looper.getMainLooper()).post {
+                        when (it) {
+                            is AlreadyStarted -> {
+                                result.error(
+                                        "MobileScanner",
+                                        "Called start() while already started",
+                                        null
+                                )
+                            }
+                            is CameraError -> {
+                                result.error(
+                                        "MobileScanner",
+                                        "Error occurred when setting up camera!",
+                                        null
+                                )
+                            }
+                            is NoCamera -> {
+                                result.error(
+                                        "MobileScanner",
+                                        "No camera found or failed to open camera!",
+                                        null
+                                )
+                            }
+                            else -> {
+                                result.error(
+                                        "MobileScanner",
+                                        "Unknown error occurred.",
+                                        null
+                                )
+                            }
+                        }
+                    }
+                },
+                timeout.toLong(),
+        )
     }
 
     private fun stop(result: MethodChannel.Result) {
