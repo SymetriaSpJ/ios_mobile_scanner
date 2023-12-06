@@ -117,12 +117,13 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
                 imagesCurrentlyBeingProcessed = false
                 
                 if (detectionSpeed == DetectionSpeed.noDuplicates) {
-                    let newScannedBarcodes = barcodes?.map { barcode in
+                    let newScannedBarcodes = barcodes?.compactMap({ barcode in
                         return barcode.rawValue
-                    }
+                    }).sorted()
+                    
                     if (error == nil && barcodesString != nil && newScannedBarcodes != nil && barcodesString!.elementsEqual(newScannedBarcodes!)) {
                         return
-                    } else {
+                    } else if (newScannedBarcodes?.isEmpty == false) {
                         barcodesString = newScannedBarcodes
                     }
                 }
@@ -133,12 +134,13 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     }
 
     /// Start scanning for barcodes
-    func start(barcodeScannerOptions: BarcodeScannerOptions?, returnImage: Bool, cameraPosition: AVCaptureDevice.Position, torch: AVCaptureDevice.TorchMode, detectionSpeed: DetectionSpeed, completion: @escaping (MobileScannerStartParameters) -> ()) throws {
+    func start(barcodeScannerOptions: BarcodeScannerOptions?, returnImage: Bool, cameraPosition: AVCaptureDevice.Position, torch: Bool, detectionSpeed: DetectionSpeed, completion: @escaping (MobileScannerStartParameters) -> ()) throws {
         self.detectionSpeed = detectionSpeed
         if (device != nil) {
             throw MobileScannerError.alreadyStarted
         }
 
+        barcodesString = nil
         scanner = barcodeScannerOptions != nil ? BarcodeScanner.barcodeScanner(options: barcodeScannerOptions!) : BarcodeScanner.barcodeScanner()
         captureSession = AVCaptureSession()
         textureId = registry?.register(self)
@@ -213,21 +215,35 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
 
         backgroundQueue.async {
             self.captureSession.startRunning()
-            // Enable the torch if parameter is set and torch is available
-            // torch should be set after 'startRunning' is called
-            do {
-                try self.toggleTorch(torch)
-            } catch {
-                print("Failed to set initial torch state.")
-            }
 
-            do {
-                try self.resetScale()
-            } catch {
-                print("Failed to reset zoom scale")
+            // After the capture session started, turn on the torch (if requested)
+            // and reset the zoom scale back to the default.
+            // Ensure that these adjustments are done on the main DispatchQueue,
+            // as they interact with the hardware camera.
+            if (torch) {
+                DispatchQueue.main.async {
+                    do {
+                        try self.toggleTorch(.on)
+                    } catch {
+                        // If the torch does not turn on,
+                        // continue with the capture session anyway.
+                    }
+                }
             }
             
+            DispatchQueue.main.async {
+                do {
+                    try self.resetScale()
+                } catch {
+                    // If the zoom scale could not be reset,
+                    // continue with the capture session anyway.
+                }
+            }
+
             if let device = self.device {
+                // When querying the dimensions of the camera,
+                // stay on the background thread,
+                // as this does not change the configuration of the hardware camera.
                 let dimensions = CMVideoFormatDescriptionGetDimensions(
                     device.activeFormat.formatDescription)
                 let hasTorch = device.hasTorch
@@ -270,19 +286,22 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         device = nil
     }
 
-    /// Toggle the flashlight between on and off
+    /// Set the torch mode.
+    ///
+    /// This method should be called on the main DispatchQueue.
     func toggleTorch(_ torch: AVCaptureDevice.TorchMode) throws {
-        if (device == nil) {
-            throw MobileScannerError.torchWhenStopped
+        guard let device = self.device else {
+            return
         }
-        if (device.hasTorch && device.isTorchAvailable) {
-            do {
-                try device.lockForConfiguration()
-                device.torchMode = torch
-                device.unlockForConfiguration()
-            } catch {
-                throw MobileScannerError.torchError(error)
-            }
+        
+        if (!device.hasTorch || !device.isTorchAvailable || !device.isTorchModeSupported(torch)) {
+            return
+        }
+        
+        if (device.torchMode != torch) {
+            try device.lockForConfiguration()
+            device.torchMode = torch
+            device.unlockForConfiguration()
         }
     }
 

@@ -23,6 +23,7 @@ class MobileScannerController {
     this.onPermissionSet,
     this.autoStart = true,
     this.cameraResolution,
+    this.useNewCameraSelector = false,
   });
 
   /// Select which camera should be used.
@@ -73,6 +74,12 @@ class MobileScannerController {
   ///
   /// Currently only supported on Android.
   final Size? cameraResolution;
+
+  /// Use the new resolution selector. Warning: not fully tested, may produce
+  /// unwanted/zoomed images.
+  ///
+  /// Only supported on Android
+  final bool useNewCameraSelector;
 
   /// Sets the barcode stream
   final StreamController<BarcodeCapture> _barcodesController =
@@ -136,6 +143,7 @@ class MobileScannerController {
     arguments['speed'] = detectionSpeed.rawValue;
     arguments['timeout'] = detectionTimeoutMs;
     arguments['returnImage'] = returnImage;
+    arguments['useNewCameraSelector'] = useNewCameraSelector;
 
     /*    if (scanWindow != null) {
       arguments['scanWindow'] = [
@@ -189,8 +197,9 @@ class MobileScannerController {
       final MobileScannerState state;
 
       try {
-        state = MobileScannerState
-            .values[await _methodChannel.invokeMethod('state') as int? ?? 0];
+        state = MobileScannerState.fromRawValue(
+          await _methodChannel.invokeMethod('state') as int? ?? 0,
+        );
       } on PlatformException catch (error) {
         isStarting = false;
 
@@ -205,32 +214,33 @@ class MobileScannerController {
       }
 
       switch (state) {
+        // Android does not have an undetermined permission state.
+        // So if the permission state is denied, just request it now.
         case MobileScannerState.undetermined:
-          bool result = false;
-
+        case MobileScannerState.denied:
           try {
-            result =
+            final bool granted =
                 await _methodChannel.invokeMethod('request') as bool? ?? false;
-          } catch (error) {
-            isStarting = false;
-            throw const MobileScannerException(
-              errorCode: MobileScannerErrorCode.genericError,
-            );
-          }
 
-          if (!result) {
+            if (!granted) {
+              isStarting = false;
+              throw const MobileScannerException(
+                errorCode: MobileScannerErrorCode.permissionDenied,
+              );
+            }
+          } on PlatformException catch (error) {
             isStarting = false;
-            throw const MobileScannerException(
-              errorCode: MobileScannerErrorCode.permissionDenied,
+            throw MobileScannerException(
+              errorCode: MobileScannerErrorCode.genericError,
+              errorDetails: MobileScannerErrorDetails(
+                code: error.code,
+                details: error.details as Object?,
+                message: error.message,
+              ),
             );
           }
 
           break;
-        case MobileScannerState.denied:
-          isStarting = false;
-          throw const MobileScannerException(
-            errorCode: MobileScannerErrorCode.permissionDenied,
-          );
         case MobileScannerState.authorized:
           break;
       }
@@ -282,9 +292,6 @@ class MobileScannerController {
 
     final hasTorch = startResult['torchable'] as bool? ?? false;
     hasTorchState.value = hasTorch;
-    if (hasTorch && torchEnabled) {
-      torchState.value = TorchState.on;
-    }
 
     final Size size;
 
@@ -305,6 +312,7 @@ class MobileScannerController {
 
     isStarting = false;
     return startArguments.value = MobileScannerArguments(
+      nrOfCameras: startResult['nrOfCameras'] as int?,
       size: size,
       hasTorch: hasTorch,
       textureId: kIsWeb ? null : startResult['textureId'] as int?,
@@ -314,11 +322,11 @@ class MobileScannerController {
 
   /// Stops the camera, but does not dispose this controller.
   Future<void> stop() async {
-    try {
-      await _methodChannel.invokeMethod('stop');
-    } catch (e) {
-      debugPrint('$e');
-    }
+    await _methodChannel.invokeMethod('stop');
+
+    // After the camera stopped, set the torch state to off,
+    // as the torch state callback is never called when the camera is stopped.
+    torchState.value = TorchState.off;
   }
 
   /// Switches the torch on or off.
@@ -333,14 +341,16 @@ class MobileScannerController {
       throw const MobileScannerException(
         errorCode: MobileScannerErrorCode.controllerUninitialized,
       );
-    } else if (!hasTorch) {
+    }
+
+    if (!hasTorch) {
       return;
     }
 
-    torchState.value =
+    final TorchState newState =
         torchState.value == TorchState.off ? TorchState.on : TorchState.off;
 
-    await _methodChannel.invokeMethod('torch', torchState.value.rawValue);
+    await _methodChannel.invokeMethod('torch', newState.rawValue);
   }
 
   /// Changes the state of the camera (front or back).

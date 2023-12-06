@@ -1,6 +1,21 @@
-## NEXT
+## 3.5.5
+Bugs fixed:
+* Fixed a bug where the scanner would get stuck after denying permissions on Android. (thanks @navaronbracke !)
+
+## 3.5.4
+Bugs fixed:
+* Fixed a bug with an implicit conversion to integer for the scan timeout for iOS. (thanks @EArminjon !)
+
+## 3.5.2
+Improvements:
+* Updated to `play-services-mlkit-barcode-scanning` version 18.3.0
+
 Bugs fixed:
 * Fixed the `updateScanWindow()` function not completing on Android and MacOS. (thanks @navaronbracke !)
+* Fixed some camera access issues, when the camera could have been null on Android. (thanks @navaronbracke !)
+* Fixed a crash on Android when there is no camera. (thanks @navaronbracke !)
+* Fixed a bug with the `noDuplicates` detection speed. (thanks @pgeof !)
+* Fixed a synchronization issue for the torch state. (thanks @navaronbracke !)
 
 ## 3.5.1
 Improvements:

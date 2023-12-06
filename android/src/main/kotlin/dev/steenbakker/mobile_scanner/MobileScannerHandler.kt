@@ -4,6 +4,7 @@ import android.app.Activity
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -135,6 +136,13 @@ class MobileScannerHandler(
         val returnImage: Boolean = call.argument<Boolean>("returnImage") ?: false
         val speed: Int = call.argument<Int>("speed") ?: 1
         val timeout: Int = call.argument<Int>("timeout") ?: 250
+        val cameraResolutionValues: List<Int>? = call.argument<List<Int>>("cameraResolution")
+        val useNewCameraSelector: Boolean = call.argument<Boolean>("useNewCameraSelector") ?: false
+        val cameraResolution: Size? = if (cameraResolutionValues != null) {
+            Size(cameraResolutionValues[0], cameraResolutionValues[1])
+        } else {
+            null
+        }
 
         var barcodeScannerOptions: BarcodeScannerOptions? = null
         if (formats != null) {
@@ -159,57 +167,60 @@ class MobileScannerHandler(
         val detectionSpeed: DetectionSpeed = DetectionSpeed.values().first { it.intValue == speed}
 
         mobileScanner!!.start(
-                barcodeScannerOptions,
-                returnImage,
-                position,
-                torch,
-                detectionSpeed,
-                torchStateCallback,
-                zoomScaleStateCallback,
-                mobileScannerStartedCallback = {
-                    Handler(Looper.getMainLooper()).post {
-                        result.success(mapOf(
-                                "textureId" to it.id,
-                                "size" to mapOf("width" to it.width, "height" to it.height),
-                                "torchable" to it.hasFlashUnit
-                        ))
-                    }
-                },
-                mobileScannerErrorCallback = {
-                    Handler(Looper.getMainLooper()).post {
-                        when (it) {
-                            is AlreadyStarted -> {
-                                result.error(
-                                        "MobileScanner",
-                                        "Called start() while already started",
-                                        null
-                                )
-                            }
-                            is CameraError -> {
-                                result.error(
-                                        "MobileScanner",
-                                        "Error occurred when setting up camera!",
-                                        null
-                                )
-                            }
-                            is NoCamera -> {
-                                result.error(
-                                        "MobileScanner",
-                                        "No camera found or failed to open camera!",
-                                        null
-                                )
-                            }
-                            else -> {
-                                result.error(
-                                        "MobileScanner",
-                                        "Unknown error occurred.",
-                                        null
-                                )
-                            }
+            barcodeScannerOptions,
+            returnImage,
+            position,
+            torch,
+            detectionSpeed,
+            torchStateCallback,
+            zoomScaleStateCallback,
+            mobileScannerStartedCallback = {
+                Handler(Looper.getMainLooper()).post {
+                    result.success(mapOf(
+                        "textureId" to it.id,
+                        "size" to mapOf("width" to it.width, "height" to it.height),
+                        "torchable" to it.hasFlashUnit,
+                        "nrOfCameras" to it.nrOfCameras
+                    ))
+                }
+            },
+            mobileScannerErrorCallback = {
+                Handler(Looper.getMainLooper()).post {
+                    when (it) {
+                        is AlreadyStarted -> {
+                            result.error(
+                                "MobileScanner",
+                                "Called start() while already started",
+                                null
+                            )
+                        }
+                        is CameraError -> {
+                            result.error(
+                                "MobileScanner",
+                                "Error occurred when setting up camera!",
+                                null
+                            )
+                        }
+                        is NoCamera -> {
+                            result.error(
+                                "MobileScanner",
+                                "No camera found or failed to open camera!",
+                                null
+                            )
+                        }
+                        else -> {
+                            result.error(
+                                "MobileScanner",
+                                "Unknown error occurred.",
+                                null
+                            )
                         }
                     }
-                },
-                timeout.toLong(),
+                }
+            },
+            timeout.toLong(),
+            cameraResolution,
+            useNewCameraSelector
         )
     }
 
@@ -229,12 +240,8 @@ class MobileScannerHandler(
     }
 
     private fun toggleTorch(call: MethodCall, result: MethodChannel.Result) {
-        try {
-            mobileScanner!!.toggleTorch(call.arguments == 1)
-            result.success(null)
-        } catch (e: TorchWhenStopped) {
-            result.error("MobileScanner", "Called toggleTorch() while stopped!", null)
-        }
+        mobileScanner!!.toggleTorch(call.arguments == 1)
+        result.success(null)
     }
 
     private fun setScale(call: MethodCall, result: MethodChannel.Result) {
