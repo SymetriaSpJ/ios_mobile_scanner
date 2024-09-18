@@ -25,16 +25,19 @@ class MobileScannerHandler(
     private val addPermissionListener: (RequestPermissionsResultListener) -> Unit,
     textureRegistry: TextureRegistry): MethodChannel.MethodCallHandler {
 
-    private val analyzerCallback: AnalyzerCallback = { barcodes: List<Map<String, Any?>>?->
-        if (barcodes != null) {
-            barcodeHandler.publishEvent(mapOf(
-                "name" to "barcode",
-                "data" to barcodes
-            ))
-        }
-
+    private val analyzeImageErrorCallback: AnalyzerErrorCallback = {
         Handler(Looper.getMainLooper()).post {
-            analyzerResult?.success(barcodes != null)
+            analyzerResult?.error("MobileScanner", it, null)
+            analyzerResult = null
+        }
+    }
+
+    private val analyzeImageSuccessCallback: AnalyzerSuccessCallback = {
+        Handler(Looper.getMainLooper()).post {
+            analyzerResult?.success(mapOf(
+                "name" to "barcode",
+                "data" to it
+            ))
             analyzerResult = null
         }
     }
@@ -46,9 +49,11 @@ class MobileScannerHandler(
             barcodeHandler.publishEvent(mapOf(
                 "name" to "barcode",
                 "data" to barcodes,
-                "image" to image,
-                "width" to width!!.toDouble(),
-                "height" to height!!.toDouble()
+                "image" to mapOf(
+                    "bytes" to image,
+                    "width" to width?.toDouble(),
+                    "height" to height?.toDouble(),
+                )
             ))
         } else {
             barcodeHandler.publishEvent(mapOf(
@@ -70,6 +75,7 @@ class MobileScannerHandler(
     private var mobileScanner: MobileScanner? = null
 
     private val torchStateCallback: TorchStateCallback = {state: Int ->
+        // Off = 0, On = 1
         barcodeHandler.publishEvent(mapOf("name" to "torchState", "data" to state))
     }
 
@@ -87,6 +93,7 @@ class MobileScannerHandler(
     fun dispose(activityPluginBinding: ActivityPluginBinding) {
         methodChannel?.setMethodCallHandler(null)
         methodChannel = null
+        mobileScanner?.dispose()
         mobileScanner = null
 
         val listener: RequestPermissionsResultListener? = permissions.getPermissionListener()
@@ -117,8 +124,8 @@ class MobileScannerHandler(
                     }
                 })
             "start" -> start(call, result)
-            "torch" -> toggleTorch(call, result)
             "stop" -> stop(result)
+            "toggleTorch" -> toggleTorch(result)
             "analyzeImage" -> analyzeImage(call, result)
             "setScale" -> setScale(call, result)
             "resetScale" -> resetScale(result)
@@ -136,27 +143,16 @@ class MobileScannerHandler(
         val speed: Int = call.argument<Int>("speed") ?: 1
         val timeout: Int = call.argument<Int>("timeout") ?: 250
 
-        var barcodeScannerOptions: BarcodeScannerOptions? = null
-        if (formats != null) {
-            val formatsList: MutableList<Int> = mutableListOf()
-            for (formatValue in formats) {
-                formatsList.add(BarcodeFormats.fromRawValue(formatValue).intValue)
-            }
-            barcodeScannerOptions = if (formatsList.size == 1) {
-                BarcodeScannerOptions.Builder().setBarcodeFormats(formatsList.first())
-                    .build()
-            } else {
-                BarcodeScannerOptions.Builder().setBarcodeFormats(
-                    formatsList.first(),
-                    *formatsList.subList(1, formatsList.size).toIntArray()
-                ).build()
-            }
-        }
+        val barcodeScannerOptions: BarcodeScannerOptions? = buildBarcodeScannerOptions(formats)
 
         val position =
             if (facing == 0) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
 
-        val detectionSpeed: DetectionSpeed = DetectionSpeed.values().first { it.intValue == speed}
+        val detectionSpeed: DetectionSpeed = when (speed) {
+            0 -> DetectionSpeed.NO_DUPLICATES
+            1 -> DetectionSpeed.NORMAL
+            else -> DetectionSpeed.UNRESTRICTED
+        }
 
         mobileScanner!!.start(
                 barcodeScannerOptions,
@@ -224,17 +220,20 @@ class MobileScannerHandler(
 
     private fun analyzeImage(call: MethodCall, result: MethodChannel.Result) {
         analyzerResult = result
-        val uri = Uri.fromFile(File(call.arguments.toString()))
-        mobileScanner!!.analyzeImage(uri, analyzerCallback)
+
+        val formats: List<Int>? = call.argument<List<Int>>("formats")
+        val filePath: String = call.argument<String>("filePath")!!
+
+        mobileScanner!!.analyzeImage(
+            Uri.fromFile(File(filePath)),
+            buildBarcodeScannerOptions(formats),
+            analyzeImageSuccessCallback,
+            analyzeImageErrorCallback)
     }
 
-    private fun toggleTorch(call: MethodCall, result: MethodChannel.Result) {
-        try {
-            mobileScanner!!.toggleTorch(call.arguments == 1)
-            result.success(null)
-        } catch (e: TorchWhenStopped) {
-            result.error("MobileScanner", "Called toggleTorch() while stopped!", null)
-        }
+    private fun toggleTorch(result: MethodChannel.Result) {
+        mobileScanner?.toggleTorch()
+        result.success(null)
     }
 
     private fun setScale(call: MethodCall, result: MethodChannel.Result) {
@@ -258,7 +257,7 @@ class MobileScannerHandler(
     }
 
     private fun updateScanWindow(call: MethodCall, result: MethodChannel.Result) {
-        mobileScanner!!.scanWindow = call.argument<List<Float>?>("rect")
+        mobileScanner?.scanWindow = call.argument<List<Float>?>("rect")
 
         result.success(null)
     }
